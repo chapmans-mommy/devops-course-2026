@@ -70,3 +70,24 @@
 | 01-clean-install | После установки ОС |
 | 02-keys-configured | После настройки SSH-ключей |
 | 03-ssh-hardened | После усиления SSH и UFW |
+
+## 8. Веб-сервер
+
+| Параметр | Значение |
+|----------|----------|
+| Пакет | nginx (установлен через `apt install nginx`) |
+| Конфигурация ресурса | `/etc/nginx/sites-available/devops-site` |
+| Активная ссылка | `/etc/nginx/sites-enabled/devops-site` |
+| Стандартный ресурс | отключён (`/etc/nginx/sites-enabled/default` удалён) |
+| Каталог ресурса | `/var/www/devops-site` |
+| Владелец каталога | `devops:devops` |
+| Права каталога | `755` (drwxr-xr-x) |
+| Права файлов | `644` (rw-r--r--) |
+| Сертификат | `/etc/ssl/certs/devops.crt`, права `644`, владелец `root:root` |
+| Закрытый ключ | `/etc/ssl/private/devops.key`, права `600`, владелец `root:root` |
+| Команда формирования сертификата | `sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/ssl/private/devops.key -out /etc/ssl/certs/devops.crt -subj "/CN=devops.local" -addext "subjectAltName=DNS:devops.local"` |
+| Срок действия сертификата | 365 дней |
+| Перенаправление HTTP → HTTPS | блок `server` с `return 301 https://$host$request_uri` |
+| Порт HTTP | 80 (редирект) |
+| Порт HTTPS | 443 (TLS) |
+| Доставка содержимого | `rsync -avz --delete --chmod=D755,F644 site/ devops:/var/www/devops-site/` |
