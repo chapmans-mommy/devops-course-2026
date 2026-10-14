@@ -155,3 +155,5 @@ docker compose up -d --build
 Аудит: /home/devops/scripts/audit.sh, раздел [5]. Проверяет active службы Docker, healthy app-db-1, отсутствие внешних сокетов 5000/5432 (включая IPv6) и права .env=600. Запуск с sudo: sudo bash ~/scripts/audit.sh; echo $?. Контроль с публикацией 5000:5000 возвращает 1; после восстановления loopback — 0.
 
 Снимки VirtualBox 01-clean-install и 04-nginx-https сохранены; итоговая конфигурация работы №7 сохранена в 05-docker-compose. Проект, том и снимки не удаляются после работы.
+
+После автоматического обновления Ubuntu новое ядро 7.0.0-38-generic не обеспечило успешную загрузку этой VM. Проверено рабочее ядро 7.0.0-34-generic. Оно выбрано в /etc/default/grub.d/99-devops-vm-kernel.cfg через GRUB_DEFAULT="Advanced options for Ubuntu>Ubuntu, with Linux 7.0.0-34-generic" и update-grub. Файл сохранён в config/grub репозитория. Для восстановления скопировать его в /etc/default/grub.d/ и выполнить sudo update-grub. Новое ядро оставлено установленным; причина несовместимости требует отдельной диагностики.
