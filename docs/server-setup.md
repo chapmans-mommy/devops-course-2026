@@ -5,7 +5,7 @@
 | Параметр | Значение |
 |----------|----------|
 | Имя VM | devops-vm |
-| ОС | Ubuntu Server 24.04 LTS |
+| ОС | Ubuntu Server 26.04.1 LTS |
 | RAM | 2048 МБ |
 | Ядра CPU | 2 |
 | Диск | 25 ГБ (динамически расширяемый) |
@@ -34,14 +34,14 @@
 | Пользователь | Группы | Аутентификация | Назначение |
 |--------------|--------|----------------|------------|
 | student | sudo, adm | Пароль | Первичная настройка |
-| devops | sudo, devops | SSH-ключ ed25519 | Основной администратор |
+| devops | sudo, users, docker | SSH-ключ ed25519 | Основной администратор |
 
 ## 5. Служба SSH
 
 | Параметр | Значение |
 |----------|----------|
 | Порт | 2222 |
-| Конфиг | /etc/ssh/sshd_config.d/99-hardening.conf |
+| Конфиг | /etc/ssh/sshd_config.d/99-hardening.conf; PasswordAuthentication=no также в 50-cloud-init.conf |
 | PermitRootLogin | no |
 | PasswordAuthentication | no |
 | PubkeyAuthentication | yes |
@@ -68,8 +68,8 @@
 | Имя снимка | Момент создания |
 |------------|-----------------|
 | 01-clean-install | После установки ОС |
-| 02-keys-configured | После настройки SSH-ключей |
-| 03-ssh-hardened | После усиления SSH и UFW |
+| 04-nginx-https | После настройки Nginx и HTTPS |
+| 05-docker-compose | После выполнения контейнеризации и проверок |
 
 ## 8. Веб-сервер
 
@@ -91,3 +91,67 @@
 | Порт HTTP | 80 (редирект) |
 | Порт HTTPS | 443 (TLS) |
 | Доставка содержимого | `rsync -avz --delete --chmod=D755,F644 site/ devops:/var/www/devops-site/` |
+
+## 9. Контейнеризация
+
+Docker Engine Community 29.9.0 и Docker Compose v5.6.0 установлены из официального APT-репозитория Docker для Ubuntu 26.04 (resolute), архитектура amd64. Установлены пакеты docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin и docker-compose-plugin. Пакет docker.io не используется.
+
+Восстановление установки:
+
+```bash
+sudo apt update
+sudo apt install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+sudo tee /etc/apt/sources.list.d/docker.sources <<'EOF'
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: resolute
+Components: stable
+Architectures: amd64
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo usermod -aG docker devops
+# Далее начать новую SSH-сессию
+```
+
+Единственный дополнительный участник группы docker — devops (UID 1001); он также входит в sudo и users. Членство в docker фактически даёт административные права на хост, поэтому учётные записи без sudo не добавляются.
+
+Исходный проект: каталог app в репозитории devops-course-2026. Расположение на сервере: /home/devops/app. Доставка с Windows выполняется MSYS2 rsync с предварительным --dry-run, флагами --delete и --exclude=.env. SSH: devops, порт 2222, ключ; хостовая сеть 192.168.56.101 и проброс 127.0.0.1:2222.
+
+Секреты хранятся только на сервере: /home/devops/app/.env, владелец devops:devops, права 600. Файл исключён через .gitignore и app/.dockerignore. В Git хранится только .env.example с заглушкой change_me. Для нового развёртывания:
+
+```bash
+cd ~/app
+cp .env.example .env
+chmod 600 .env
+sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
+docker compose up -d --build
+```
+
+Не перегенерировать пароль в существующем .env без согласованного изменения пароля в PostgreSQL: POSTGRES_PASSWORD применяется при первичной инициализации пустого тома.
+
+Контейнер app-app-1 использует devops-app:1.0, Gunicorn на 5000, USER app (UID/GID 999). На хосте опубликован только 127.0.0.1:5000:5000. Контейнер app-db-1 использует postgres:16-alpine; порт 5432 наружу не опубликован. Оба сервиса в bridge-сети app_backend; DB_HOST=db разрешается встроенным DNS Docker. depends_on: condition: service_healthy ожидает pg_isready.
+
+Именованный том app_db_data смонтирован в /var/lib/postgresql/data. docker compose down сохраняет том и счётчик; down -v удаляет базу. После учебного опыта том создан заново и сохранён. Оба сервиса имеют restart: unless-stopped.
+
+Обратный прокси: /etc/nginx/sites-available/devops-site, активная ссылка /etc/nginx/sites-enabled/devops-site. В HTTPS-блок добавлено:
+
+```nginx
+    location /app/ {
+        proxy_pass http://127.0.0.1:5000/;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+```
+
+Статический location / и каталог /var/www/devops-site сохранены. HTTPS принимает 443; HTTP 80 перенаправляется на HTTPS. Завершающий / в proxy_pass преобразует /app/health в /health. Проверка и применение: sudo nginx -t && sudo systemctl reload nginx. Журнал ошибок: /var/log/nginx/devops-site.error.log. Конфигурация Nginx сохранена в config/nginx/devops-site репозитория.
+
+Аудит: /home/devops/scripts/audit.sh, раздел [5]. Проверяет active службы Docker, healthy app-db-1, отсутствие внешних сокетов 5000/5432 (включая IPv6) и права .env=600. Запуск с sudo: sudo bash ~/scripts/audit.sh; echo $?. Контроль с публикацией 5000:5000 возвращает 1; после восстановления loopback — 0.
+
+Снимки VirtualBox 01-clean-install и 04-nginx-https сохранены; итоговая конфигурация работы №7 сохранена в 05-docker-compose. Проект, том и снимки не удаляются после работы.
