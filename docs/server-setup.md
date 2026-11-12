@@ -157,3 +157,40 @@ docker compose up -d --build
 Снимки VirtualBox 01-clean-install и 04-nginx-https сохранены; итоговая конфигурация работы №7 сохранена в 05-docker-compose. Проект, том и снимки не удаляются после работы.
 
 После автоматического обновления Ubuntu новое ядро 7.0.0-38-generic не обеспечило успешную загрузку этой VM. Проверено рабочее ядро 7.0.0-34-generic. Оно выбрано в /etc/default/grub.d/99-devops-vm-kernel.cfg через GRUB_DEFAULT="Advanced options for Ubuntu>Ubuntu, with Linux 7.0.0-34-generic" и update-grub. Файл сохранён в config/grub репозитория. Для восстановления скопировать его в /etc/default/grub.d/ и выполнить sudo update-grub. Новое ядро оставлено установленным; причина несовместимости требует отдельной диагностики.
+
+
+## 10. Ansible
+
+Практика 11 выполняется после возврата devops-vm к 01-clean-install. Состояние предыдущих работ сохранено в снимке 08-before-ansible-2026-11-12. Описанные выше настройки прежних работ не являются состоянием чистой VM.
+
+Управляющий узел — WSL Ubuntu 24.04, проект /home/valeriya/devops-course-2026/ansible в файловой системе Linux. Ansible Core 2.21.6 установлен в /home/valeriya/.venvs/pr11-ansible: эта версия поддерживает sudo-rs и Python 3.14 целевой VM. Установлены коллекции из requirements.yml и sshpass. Ключ ~/.ssh/devops_vm имеет права 0600, закрытая часть хранится вне Git.
+
+Управляемый узел — devops-vm, Host-only 192.168.56.101, SSH 22. В снимке фактически установлена Ubuntu 26.04.1. По согласованию проверка ОС в base изменена с 24.04 на 26.04, остальная логика ролей сохранена. inventory/bootstrap.ini использует student и интерактивные пароли; inventory/prod.ini — devops и SSH-ключ. devops получает NOPASSWD sudo. После установки ключа парольный SSH и вход root отключены.
+
+Роль base проверяет ОС, устанавливает зависимости и Docker Engine из официального репозитория. ssh управляет пользователем, ключом, sudo, hardening и UFW. nginx устанавливает HTTP reverse proxy, отключает default site, проверяет конфигурацию перед reload. app сначала загружает образ, затем управляет контейнером и ожидает успешный /health. force_handlers=True обеспечивает выполнение уведомлённых обработчиков и при поздней ошибке.
+
+Образ: ghcr.io/chapmans-mommy/devops-ci-app:cb36dca63ea63e9869ee5f6f1c5b0d32f237c3aa. Полный SHA: cb36dca63ea63e9869ee5f6f1c5b0d32f237c3aa, версия задаётся app_tag в group_vars/all.yml. Контейнер devops-ci-app публикует только 127.0.0.1:5000:5000 и использует restart unless-stopped. Nginx принимает HTTP 80; /health возвращает HTTP 200 и JSON status=ok. UFW разрешает входящие 22/tcp и 80/tcp. HTTPS в этой практике не настраивается.
+
+Подготовка и первичный запуск:
+
+```bash
+source ~/.venvs/pr11-ansible/bin/activate
+cd ~/devops-course-2026
+ansible-galaxy collection install -r ansible/requirements.yml
+cd ansible
+ansible-playbook -i inventory/bootstrap.ini site.yml --ask-pass --ask-become-pass
+```
+
+Повторное применение и отдельный read-only аудит используют prod.ini из ansible.cfg:
+
+```bash
+ansible-playbook site.yml
+ansible-playbook verify.yml
+curl --fail http://192.168.56.101/health
+```
+
+Ожидаемый результат повторного применения и аудита — changed=0, failed=0. verify.yml читает эффективную конфигурацию SSH, состояние контейнера и JSON /health. Для sshd -T задан changed_when: false, потому что команда только читает конфигурацию. Аудит пригоден для CI без применения настроек.
+
+При удалении контейнера и замене upstream 5000 на 5001 появляется HTTP 502. Восстановление выполняется только site.yml: шаблон Nginx возвращается, контейнер создаётся, обработчик проверяет и перезагружает Nginx. Несуществующий app_tag останавливает play на Pull reviewed application image до изменения прежнего контейнера. После проверки вернуть переменные командой git restore group_vars/all.yml и запустить site.yml.
+
+Host-only адрес недоступен GitHub-hosted runner напрямую. Для КР 3 потребуется согласованный сетевой доступ или подходящий self-hosted runner с защитой репозитория и внешних запусков; SSH-секреты не следует записывать в журнал.
