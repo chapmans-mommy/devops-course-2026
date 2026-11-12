@@ -1,0 +1,6 @@
+---
+app_image: "ghcr.io/chapmans-mommy/devops-ci-app"
+app_tag: "cb36dca63ea63e9869ee5f6f1c5b0d32f237c3aa"
+app_container_name: "devops-ci-app"
+app_host_port: 5000
+app_internal_port: 5000
